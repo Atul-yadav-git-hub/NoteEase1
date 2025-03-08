@@ -1,0 +1,24 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# NoteEase App Development Rule
+
+- This is a **React Native Expo** project called "NoteEase."
+- The app is **local-only** (no cloud storage) and optimized for **speed**.
+- Use **react-native-pell-rich-editor** for rich text formatting.
+- Support **dark and light themes** with a toggle option.
+- Store notes **locally** using AsyncStorage or SQLite.
+- Features:
+  - **Home Screen** with a search bar and category-based note filtering.
+  - **Note Editor Screen** with formatting tools, tags, and media support.
+  - **Auto-save** while typing.
+  - **Undo/Redo** support in the editor.
+  - **Pin important notes** to keep them at the top.
+  - **Trash/Archive** system for deleted notes.
+  - **Optional Folder Organization** for better note management.
+  - **Theme switching** stored in AsyncStorage.
+- Use **React Navigation** for screen transitions.
+- Ensure **offline-first performance** with fast load times.
+- UI should match the provided design reference.
