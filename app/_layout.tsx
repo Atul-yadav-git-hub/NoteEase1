@@ -4,33 +4,50 @@ import { useFonts } from 'expo-font';
 import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import 'react-native-reanimated';
-import { useColorScheme, View, Text, TouchableOpacity, Alert, StyleSheet, Image } from 'react-native';
+import { useColorScheme, View, Text, TouchableOpacity, Alert, StyleSheet, Image, Platform, AppState } from 'react-native';
 import { useStore } from '../store/useStore';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Updates from 'expo-updates';
 import * as QuickActions from 'expo-quick-actions';
 import { initializeQuickActions, handleQuickAction } from '../utils/quickActions';
 import LaunchScreen from './LaunchScreen';
+import Constants from 'expo-constants';
+import { SplashScreenTester } from './utils/splashScreenTester';
+
+// PRODUCTION SIMULATION FLAG - set to true to simulate production in dev mode
+const SIMULATE_PRODUCTION = true;
+
+// Check if we're in production or simulating production
+const isProductionEnv = !__DEV__ || SIMULATE_PRODUCTION;
+
+// Configuration flags
+const enableDebugLogsInProduction = true;
+const enableSplashScreenTesting = __DEV__ && !SIMULATE_PRODUCTION;
+
+// Universal logger that always works in both dev and production
+const logger = {
+  log: (...args: any[]) => {
+    if (__DEV__ || enableDebugLogsInProduction) console.log('[NoteEase]', ...args);
+  },
+  warn: (...args: any[]) => {
+    if (__DEV__ || enableDebugLogsInProduction) console.warn('[NoteEase]', ...args);
+  },
+  error: (...args: any[]) => {
+    if (__DEV__ || enableDebugLogsInProduction) console.error('[NoteEase]', ...args);
+  }
+};
+
+// Log production simulation status
+if (SIMULATE_PRODUCTION && __DEV__) {
+  logger.log('⚠️ SIMULATING PRODUCTION ENVIRONMENT');
+}
 
 // Preload images
 const iconImage = require('../assets/images/resized/icon-1024.png');
 const splashImage = require('../assets/images/resized/splash-icon-2048.png');
 const adaptiveIconImage = require('../assets/images/resized/adaptive-icon-1024.png');
-
-// Only log in development mode
-const logger = {
-  log: (...args: any[]) => {
-    if (__DEV__) console.log(...args);
-  },
-  warn: (...args: any[]) => {
-    if (__DEV__) console.warn(...args);
-  },
-  error: (...args: any[]) => {
-    if (__DEV__) console.error(...args);
-  }
-};
 
 export {
   // Catch any errors thrown by the Layout component.
@@ -42,8 +59,47 @@ export const unstable_settings = {
   initialRouteName: 'index',
 };
 
-// Prevent the splash screen from auto-hiding before asset loading is complete.
-SplashScreen.preventAutoHideAsync();
+// PRODUCTION OPTIMIZATIONS
+if (isProductionEnv) {
+  // In production, make sure we check for app updates
+  try {
+    // Check if we're running in Expo Go or a standalone app
+    const checkForUpdates = async () => {
+      try {
+        // This will throw an error in Expo Go
+        const isUpdateAvailable = await Updates.checkForUpdateAsync();
+        logger.log('Update check result:', isUpdateAvailable);
+        
+        if (isUpdateAvailable.isAvailable) {
+          await Updates.fetchUpdateAsync();
+          await Updates.reloadAsync();
+        }
+      } catch (error: any) {
+        // If we get a specific error about Expo Go, log it clearly
+        if (error?.message?.includes('Expo Go')) {
+          logger.log('Running in Expo Go, updates not available');
+        } else {
+          logger.error('Update check failed:', error);
+        }
+      }
+    };
+    
+    // Only run in a try/catch to prevent app crashes
+    checkForUpdates().catch((e: Error) => {
+      logger.error('Unexpected error during update check:', e);
+    });
+  } catch (e: any) {
+    logger.error('Error setting up updates:', e);
+  }
+}
+
+// Use a try-catch for preventAutoHideAsync to avoid app crashes
+try {
+  logger.log('Attempting to prevent auto hide of splash screen');
+  SplashScreen.preventAutoHideAsync();
+} catch (e) {
+  logger.warn('Could not prevent splash screen auto-hide', e);
+}
 
 export default function RootLayout() {
   const colorScheme = useColorScheme();
@@ -54,14 +110,68 @@ export default function RootLayout() {
   const [initializationFailed, setInitializationFailed] = useState(false);
   const [initAttempts, setInitAttempts] = useState(0);
   const [isAppReady, setIsAppReady] = useState(false);
+  const [splashHidden, setSplashHidden] = useState(false);
+  const [showSplashTester, setShowSplashTester] = useState(false);
+  const theme = isDarkMode ? DarkTheme : DefaultTheme;
+  const appStateRef = useRef(AppState.currentState);
+
+  // Create a more aggressive splash screen hiding mechanism
+  const hideSplashScreen = useCallback(async () => {
+    if (splashHidden) return; // Avoid multiple hide attempts
+    
+    logger.log('Attempting to hide splash screen');
+    setSplashHidden(true);
+    
+    // Try multiple approaches to hide the splash screen
+    const tryHide = async () => {
+      try {
+        await SplashScreen.hideAsync();
+        logger.log('Splash screen hidden successfully via hideAsync');
+        return true;
+      } catch (e) {
+        logger.error('Error hiding splash screen via hideAsync', e);
+        return false;
+      }
+    };
+    
+    // First attempt
+    const firstAttempt = await tryHide();
+    if (!firstAttempt) {
+      // Retry with delay on failure
+      setTimeout(async () => {
+        const secondAttempt = await tryHide();
+        if (!secondAttempt) {
+          logger.warn('Multiple attempts to hide splash screen failed');
+        }
+      }, Platform.OS === 'android' ? 500 : 300);
+    }
+  }, [splashHidden]);
+
+  // App state change handler to help with splash screen issues
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', nextAppState => {
+      if (
+        appStateRef.current.match(/inactive|background/) && 
+        nextAppState === 'active' &&
+        !splashHidden
+      ) {
+        // App came to foreground - good time to try hiding splash again
+        logger.log('App came to foreground, attempting to hide splash screen');
+        hideSplashScreen();
+      }
+      
+      appStateRef.current = nextAppState;
+    });
+    
+    return () => {
+      subscription.remove();
+    };
+  }, [hideSplashScreen, splashHidden]);
 
   // Initialize quick actions
   useEffect(() => {
     initializeQuickActions();
-
-    // Set up quick action listener
     const subscription = QuickActions.addListener(handleQuickAction);
-
     return () => {
       subscription.remove();
     };
@@ -107,36 +217,37 @@ export default function RootLayout() {
 
   // Initialize the store on app startup
   useEffect(() => {
+    logger.log('App initialization started - loaded:', loaded, 'initialized:', isInitialized);
+    
     const initApp = async () => {
       try {
         if (initialize && !isInitialized) {
+          logger.log('Running store initialization');
           setInitAttempts(prev => prev + 1);
           await initialize();
+          logger.log('Store initialization complete');
         }
         
-        // Set app ready flag to control LaunchScreen
+        // Set app ready flag when everything is initialized
         if (loaded && isInitialized) {
+          logger.log('Assets loaded and store initialized, app ready');
           setIsAppReady(true);
           
-          // Try to hide the native splash screen
-          try {
-            await SplashScreen.hideAsync();
-          } catch (e) {
-            logger.error('Error hiding splash screen:', e);
-          }
+          // Use platform-specific delays for hiding the splash screen
+          const delay = Platform.OS === 'android' ? 300 : 200;
+          setTimeout(() => {
+            hideSplashScreen();
+          }, delay);
         }
       } catch (error) {
-        console.error('Error initializing app:', error);
+        logger.error('Error initializing app:', error);
         setInitializationFailed(true);
         
         // After 2 attempts, give up and show emergency reset option
         if (initAttempts >= 2) {
-          setIsAppReady(true); // Show the app even if initialization failed
-          try {
-            await SplashScreen.hideAsync();
-          } catch (e) {
-            logger.error('Error hiding splash screen:', e);
-          }
+          logger.warn('Multiple initialization attempts failed, showing emergency UI');
+          setIsAppReady(true);
+          hideSplashScreen();
         } else {
           // Try again one more time
           setTimeout(initApp, 1000);
@@ -147,10 +258,37 @@ export default function RootLayout() {
     if (!isInitialized) {
       initApp();
     } else if (loaded) {
+      logger.log('Already initialized with loaded assets, app ready');
       setIsAppReady(true);
-      SplashScreen.hideAsync().catch(e => logger.error('Error hiding splash screen:', e));
+      hideSplashScreen();
     }
-  }, [initialize, loaded, isInitialized, initAttempts]);
+  }, [initialize, loaded, isInitialized, initAttempts, hideSplashScreen]);
+
+  // Multiple safety nets to ensure splash screen is hidden
+  useEffect(() => {
+    // Safety net 1: Hide after a timeout
+    const SPLASH_TIMEOUT = Platform.OS === 'android' ? 4000 : 3000;
+    const timeoutId = setTimeout(() => {
+      if (!isAppReady || !splashHidden) {
+        logger.warn(`Forcing app ready and hiding splash after ${SPLASH_TIMEOUT}ms timeout`);
+        setIsAppReady(true);
+        hideSplashScreen();
+      }
+    }, SPLASH_TIMEOUT);
+    
+    // Safety net 2: Additional attempt after another delay
+    const secondTimeoutId = setTimeout(() => {
+      if (!splashHidden) {
+        logger.warn('Second forced attempt to hide splash screen');
+        hideSplashScreen();
+      }
+    }, SPLASH_TIMEOUT + 2000);
+    
+    return () => {
+      clearTimeout(timeoutId);
+      clearTimeout(secondTimeoutId);
+    };
+  }, [isAppReady, hideSplashScreen, splashHidden]);
 
   // Show emergency reset screen if initialization fails
   if (initializationFailed) {
@@ -180,12 +318,16 @@ export default function RootLayout() {
     );
   }
 
+  // Return a loading placeholder that doesn't interfere with native splash
   if (!loaded || !isInitialized) {
-    return null; // Return null instead of LaunchScreen to use the native splash screen
+    return (
+      <View style={{flex: 1, backgroundColor: '#ffffff'}} />
+    );
   }
 
+  // Return the layout with optional splash screen tester
   return (
-    <ThemeProvider value={isDarkMode ? DarkTheme : DefaultTheme}>
+    <ThemeProvider value={theme}>
       {/* Only show LaunchScreen until the app is ready */}
       {!isAppReady && <LaunchScreen onReady={false} />}
 
@@ -201,6 +343,33 @@ export default function RootLayout() {
           }} 
         />
       </Stack>
+
+      {/* Special transition component to help with splash screen hiding */}
+      {isAppReady && !splashHidden && (
+        <LaunchScreen onReady={true} />
+      )}
+
+      {/* Splash screen testing utility (only in development) */}
+      {enableSplashScreenTesting && isAppReady && showSplashTester && (
+        <SplashScreenTester onDismiss={() => setShowSplashTester(false)} />
+      )}
+
+      {/* Button to show the splash screen tester */}
+      {enableSplashScreenTesting && isAppReady && !showSplashTester && (
+        <TouchableOpacity 
+          style={{
+            position: 'absolute', 
+            bottom: 20, 
+            right: 20, 
+            backgroundColor: 'rgba(0,0,0,0.5)',
+            padding: 10,
+            borderRadius: 5,
+          }}
+          onPress={() => setShowSplashTester(true)}
+        >
+          <Text style={{ color: 'white' }}>Test Splash</Text>
+        </TouchableOpacity>
+      )}
     </ThemeProvider>
   );
 }

@@ -12,13 +12,23 @@
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
+    "androidStatusBar": {
+      "barStyle": "dark-content",
+      "backgroundColor": "#ffffff",
+      "translucent": false
+    },
+    "androidNavigationBar": {
+      "barStyle": "dark-content",
+      "backgroundColor": "#ffffff"
+    },
     "assetBundlePatterns": [
       "**/*"
     ],
     "ios": {
       "supportsTablet": true,
       "infoPlist": {
-        "NSPhotoLibraryUsageDescription": "Allow NoteEase to access your photos to add images to your notes"
+        "NSPhotoLibraryUsageDescription": "Allow NoteEase to access your photos to add images to your notes",
+        "UIBackgroundModes": ["fetch"]
       },
       "bundleIdentifier": "com.atulyadav_expo.NoteEase",
       "icon": "./assets/images/resized/icon-1024.png"
@@ -33,7 +43,8 @@
         "android.permission.READ_EXTERNAL_STORAGE",
         "android.permission.RECORD_AUDIO"
       ],
-      "package": "com.atulyadav_expo.NoteEase"
+      "package": "com.atulyadav_expo.NoteEase",
+      "softwareKeyboardLayoutMode": "resize"
     },
     "web": {
       "bundler": "metro",
@@ -46,9 +57,13 @@
         "expo-splash-screen",
         {
           "image": "./assets/images/resized/splash-icon-2048.png",
-          "imageWidth": 200,
-          "resizeMode": "contain",
-          "backgroundColor": "#ffffff"
+          "imageResizeMode": "contain",
+          "backgroundColor": "#ffffff",
+          "dark": {
+            "image": "./assets/images/resized/splash-icon-2048.png",
+            "imageResizeMode": "contain",
+            "backgroundColor": "#ffffff"
+          }
         }
       ],
       [
