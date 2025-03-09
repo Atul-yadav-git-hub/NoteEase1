@@ -6,12 +6,18 @@ import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useState } from 'react';
 import 'react-native-reanimated';
-import { useColorScheme, View, Text, TouchableOpacity, Alert, StyleSheet } from 'react-native';
+import { useColorScheme, View, Text, TouchableOpacity, Alert, StyleSheet, Image } from 'react-native';
 import { useStore } from '../store/useStore';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Updates from 'expo-updates';
 import * as QuickActions from 'expo-quick-actions';
 import { initializeQuickActions, handleQuickAction } from '../utils/quickActions';
+import LaunchScreen from './LaunchScreen';
+
+// Preload images
+const iconImage = require('../assets/images/resized/icon-1024.png');
+const splashImage = require('../assets/images/resized/splash-icon-2048.png');
+const adaptiveIconImage = require('../assets/images/resized/adaptive-icon-1024.png');
 
 // Only log in development mode
 const logger = {
@@ -47,6 +53,7 @@ export default function RootLayout() {
   });
   const [initializationFailed, setInitializationFailed] = useState(false);
   const [initAttempts, setInitAttempts] = useState(0);
+  const [isAppReady, setIsAppReady] = useState(false);
 
   // Initialize quick actions
   useEffect(() => {
@@ -107,9 +114,16 @@ export default function RootLayout() {
           await initialize();
         }
         
-        // Hide splash screen once everything is ready
+        // Set app ready flag to control LaunchScreen
         if (loaded && isInitialized) {
-          await SplashScreen.hideAsync();
+          setIsAppReady(true);
+          
+          // Try to hide the native splash screen
+          try {
+            await SplashScreen.hideAsync();
+          } catch (e) {
+            logger.error('Error hiding splash screen:', e);
+          }
         }
       } catch (error) {
         console.error('Error initializing app:', error);
@@ -117,7 +131,12 @@ export default function RootLayout() {
         
         // After 2 attempts, give up and show emergency reset option
         if (initAttempts >= 2) {
-          await SplashScreen.hideAsync();
+          setIsAppReady(true); // Show the app even if initialization failed
+          try {
+            await SplashScreen.hideAsync();
+          } catch (e) {
+            logger.error('Error hiding splash screen:', e);
+          }
         } else {
           // Try again one more time
           setTimeout(initApp, 1000);
@@ -128,7 +147,8 @@ export default function RootLayout() {
     if (!isInitialized) {
       initApp();
     } else if (loaded) {
-      SplashScreen.hideAsync();
+      setIsAppReady(true);
+      SplashScreen.hideAsync().catch(e => logger.error('Error hiding splash screen:', e));
     }
   }, [initialize, loaded, isInitialized, initAttempts]);
 
@@ -161,11 +181,14 @@ export default function RootLayout() {
   }
 
   if (!loaded || !isInitialized) {
-    return null;
+    return null; // Return null instead of LaunchScreen to use the native splash screen
   }
 
   return (
     <ThemeProvider value={isDarkMode ? DarkTheme : DefaultTheme}>
+      {/* Only show LaunchScreen until the app is ready */}
+      {!isAppReady && <LaunchScreen onReady={false} />}
+
       <Stack>
         <Stack.Screen name="index" options={{ headerShown: false }} />
         <Stack.Screen name="trash" options={{ headerShown: false }} />
