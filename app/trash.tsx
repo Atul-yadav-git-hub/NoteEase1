@@ -48,7 +48,7 @@ const DeletedNoteCard = ({
           {note.title || 'Untitled'}
         </Text>
         <Text style={[styles.noteDate, { color: theme.cardText }]}>
-          {formatDate(note.updatedAt)}
+          {formatDate(note.createdAt)}
         </Text>
       </View>
       <View style={styles.noteActions}>

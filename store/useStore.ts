@@ -1,10 +1,24 @@
 import { create } from 'zustand';
 import { Note, NoteCategory, AppState } from '../types';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Platform } from 'react-native';
 
 const STORAGE_KEY = 'noteease-data';
 const THEME_KEY = 'noteease-theme';
 const CUSTOM_CATEGORIES_KEY = 'noteease-categories';
+
+// Simple logger for development only
+const logger = {
+  log: (...args: any[]) => {
+    if (__DEV__) console.log(...args);
+  },
+  warn: (...args: any[]) => {
+    if (__DEV__) console.warn(...args);
+  },
+  error: (...args: any[]) => {
+    if (__DEV__) console.error(...args);
+  }
+};
 
 // Generate a unique ID compatible with React Native
 const generateId = () => {
@@ -17,17 +31,48 @@ const generateId = () => {
 // Enhanced AsyncStorage operations with better error handling
 const loadInitialState = async () => {
   try {
-    console.log('Loading data from AsyncStorage...');
+    logger.log('Loading data from AsyncStorage...');
     
     const savedNotesString = await AsyncStorage.getItem(STORAGE_KEY);
     const savedThemeString = await AsyncStorage.getItem(THEME_KEY);
     const savedCategoriesString = await AsyncStorage.getItem(CUSTOM_CATEGORIES_KEY);
     
-    console.log('Notes loaded:', savedNotesString ? 'Yes' : 'No');
+    logger.log('Notes loaded:', savedNotesString ? 'Yes' : 'No');
     
-    const notesData = savedNotesString ? JSON.parse(savedNotesString) : [];
-    const themeData = savedThemeString ? JSON.parse(savedThemeString) : false;
-    const categoriesData = savedCategoriesString ? JSON.parse(savedCategoriesString) : [];
+    let notesData = [];
+    let themeData = false;
+    let categoriesData = [];
+    
+    try {
+      if (savedNotesString) {
+        notesData = JSON.parse(savedNotesString);
+      }
+      if (savedThemeString) {
+        themeData = JSON.parse(savedThemeString);
+      }
+      if (savedCategoriesString) {
+        categoriesData = JSON.parse(savedCategoriesString);
+      }
+    } catch (parseError: unknown) {
+      logger.error('Error parsing stored data:', parseError);
+      
+      // If we hit the "Row too big" error, clear the storage and start fresh
+      if (parseError instanceof Error && 
+         (parseError.message.includes('Row too big') || 
+          parseError.message.includes('CursorWindow'))) {
+        logger.warn('Storage size limit reached. Resetting app data...');
+        await clearStorage();
+        
+        // Show a warning to the user via Alert (will be handled in the UI)
+        return { 
+          notes: [], 
+          isDarkMode: false, 
+          customCategories: [],
+          storageError: true,
+          errorMessage: 'Your notes data exceeded the storage limit. The app has been reset. Please avoid storing very large images directly in notes.'
+        };
+      }
+    }
     
     return {
       notes: notesData,
@@ -35,21 +80,27 @@ const loadInitialState = async () => {
       customCategories: categoriesData,
     };
   } catch (error) {
-    console.error('Error loading data from AsyncStorage:', error);
-    return { notes: [], isDarkMode: false, customCategories: [] };
+    logger.error('Error loading data from AsyncStorage:', error);
+    return { 
+      notes: [], 
+      isDarkMode: false, 
+      customCategories: [],
+      storageError: true,
+      errorMessage: 'There was an error loading your notes. The app data has been reset.'
+    };
   }
 };
 
 // Save state to AsyncStorage with async/await pattern
 const saveNotes = async (notes: Note[]) => {
   try {
-    console.log('Saving notes to AsyncStorage...', notes.length);
+    logger.log('Saving notes to AsyncStorage...', notes.length);
     const jsonValue = JSON.stringify(notes);
     await AsyncStorage.setItem(STORAGE_KEY, jsonValue);
-    console.log('Notes saved successfully');
+    logger.log('Notes saved successfully');
     return true;
   } catch (error) {
-    console.error('Error saving notes to AsyncStorage:', error);
+    logger.error('Error saving notes to AsyncStorage:', error);
     return false;
   }
 };
@@ -59,7 +110,7 @@ const saveTheme = async (isDarkMode: boolean) => {
     await AsyncStorage.setItem(THEME_KEY, JSON.stringify(isDarkMode));
     return true;
   } catch (error) {
-    console.error('Error saving theme to AsyncStorage:', error);
+    logger.error('Error saving theme to AsyncStorage:', error);
     return false;
   }
 };
@@ -69,7 +120,7 @@ const saveCategories = async (categories: string[]) => {
     await AsyncStorage.setItem(CUSTOM_CATEGORIES_KEY, JSON.stringify(categories));
     return true;
   } catch (error) {
-    console.error('Error saving categories to AsyncStorage:', error);
+    logger.error('Error saving categories to AsyncStorage:', error);
     return false;
   }
 };
@@ -78,11 +129,48 @@ const saveCategories = async (categories: string[]) => {
 const clearStorage = async () => {
   try {
     await AsyncStorage.clear();
-    console.log('Storage cleared successfully');
+    logger.log('Storage cleared successfully');
     return true;
   } catch (e) {
-    console.error('Failed to clear storage:', e);
+    logger.error('Failed to clear storage:', e);
     return false;
+  }
+};
+
+// Improved clearStorage for emergency recovery
+const emergencyClearStorage = async () => {
+  try {
+    logger.warn('EMERGENCY: Clearing all app storage due to data corruption');
+    
+    // Clear specific keys first
+    await AsyncStorage.removeItem(STORAGE_KEY);
+    await AsyncStorage.removeItem(THEME_KEY);
+    await AsyncStorage.removeItem(CUSTOM_CATEGORIES_KEY);
+    
+    // Then try the full clear
+    await AsyncStorage.clear();
+    
+    // Verify the clear worked
+    const testRead = await AsyncStorage.getItem(STORAGE_KEY);
+    if (testRead !== null) {
+      logger.warn('AsyncStorage.clear() did not work, manually cleared keys');
+    } else {
+      logger.log('Storage cleared completely');
+    }
+    
+    return true;
+  } catch (error) {
+    logger.error('Failed to clear storage:', error);
+    
+    // Last resort - try one more time with just key removal
+    try {
+      await AsyncStorage.removeItem(STORAGE_KEY);
+      logger.log('Cleared notes data as last resort');
+      return true;
+    } catch (e) {
+      logger.error('Complete failure to clear storage:', e);
+      return false;
+    }
   }
 };
 
@@ -95,31 +183,121 @@ export const useStore = create<AppState>((set, get) => ({
   isDarkMode: false,
   isInitialized: false,
   customCategories: [],
+  initialNoteCategory: null as NoteCategory | null,
 
-  // Initialize the store with better error handling
+  // Set initial category for new note
+  setInitialNoteCategory: (category: NoteCategory | null) => {
+    set({ initialNoteCategory: category });
+  },
+
+  // Reset all app data
+  resetAppData: async () => {
+    try {
+      const success = await emergencyClearStorage();
+      if (success) {
+        set({
+          notes: [],
+          filteredNotes: [],
+          activeCategory: 'all',
+          searchQuery: '',
+          isDarkMode: false,
+          customCategories: [],
+          isInitialized: true
+        });
+        return true;
+      }
+      return false;
+    } catch (error) {
+      logger.error('Error in resetAppData:', error);
+      return false;
+    }
+  },
+
+  // Initialize with emergency recovery option
   initialize: async () => {
     if (get().isInitialized) return;
     
     try {
-      const { notes, isDarkMode, customCategories } = await loadInitialState();
-      console.log('Store initialized with', notes.length, 'notes');
-      
-      set({ 
-        notes,
-        isDarkMode,
-        customCategories,
-        filteredNotes: notes.filter((note: Note) => !note.isDeleted),
-        isInitialized: true
-      });
+      try {
+        logger.log('Attempting to load app data...');
+        const result = await loadInitialState();
+        logger.log('Store initialized with', result.notes.length, 'notes');
+        
+        // Check if there was a storage error
+        if (result.storageError) {
+          logger.warn('Storage error detected, resetting app data');
+          await emergencyClearStorage();
+          
+          set({ 
+            notes: [],
+            filteredNotes: [],
+            customCategories: [],
+            isDarkMode: false,
+            isInitialized: true
+          });
+          
+          return {
+            notes: [],
+            isDarkMode: false,
+            customCategories: [],
+            storageError: true,
+            errorMessage: 'Your notes data exceeded the storage limit. The app has been reset. Please avoid storing large images directly in notes.'
+          };
+        }
+        
+        // Set the basic state
+        set({ 
+          notes: result.notes,
+          isDarkMode: result.isDarkMode,
+          customCategories: result.customCategories,
+          isInitialized: true
+        });
+        
+        // Filter and sort the notes
+        const filteredAndSortedNotes = get().filterNotes(result.notes);
+        set({ filteredNotes: filteredAndSortedNotes });
+        
+        return result;
+      } catch (loadError) {
+        // Critical recovery - if any error happens during load, clear everything
+        logger.error('Critical error loading data:', loadError);
+        logger.warn('Forcing complete app reset due to critical error');
+        
+        await emergencyClearStorage();
+        
+        set({ 
+          notes: [],
+          filteredNotes: [],
+          customCategories: [],
+          isDarkMode: false,
+          isInitialized: true
+        });
+        
+        return {
+          notes: [],
+          isDarkMode: false,
+          customCategories: [],
+          storageError: true,
+          errorMessage: 'A critical error occurred. All app data has been reset to recover functionality.'
+        };
+      }
     } catch (error) {
-      console.error('Error initializing store:', error);
-      // Ensure we don't get stuck in an uninitialized state
+      logger.error('Unrecoverable error in initialization:', error);
+      // Last resort - just mark as initialized with empty data
       set({ 
         notes: [],
         filteredNotes: [],
         customCategories: [],
         isInitialized: true 
       });
+      
+      return {
+        notes: [],
+        isDarkMode: false,
+        customCategories: [],
+        storageError: true,
+        errorMessage: 'Failed to initialize the app. The data has been reset.'
+      };
     }
   },
 
@@ -165,7 +343,7 @@ export const useStore = create<AppState>((set, get) => ({
 
   // Note management - with async operations and better error handling
   addNote: (note: Omit<Note, 'id' | 'createdAt' | 'updatedAt'>) => {
-    console.log('Adding new note:', note.title);
+    logger.log('Adding new note:', note.title);
     
     set(state => {
       const newNote: Note = {
@@ -175,12 +353,13 @@ export const useStore = create<AppState>((set, get) => ({
         updatedAt: new Date().toISOString(),
       };
       
-      const updatedNotes = [...state.notes, newNote];
+      // Add new note at the beginning of the array instead of the end
+      const updatedNotes = [newNote, ...state.notes];
       
       // Save notes asynchronously
       saveNotes(updatedNotes).then(success => {
         if (!success) {
-          console.error('Failed to save notes after adding');
+          logger.error('Failed to save notes after adding');
         }
       });
       
@@ -206,12 +385,12 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   updateNote: (id: string, noteUpdates: Partial<Note>) => {
-    console.log('Updating note:', id);
+    logger.log('Updating note:', id);
     
     set(state => {
       const noteToUpdate = state.notes.find(note => note.id === id);
       if (!noteToUpdate) {
-        console.error('Note not found for update:', id);
+        logger.error('Note not found for update:', id);
         return state; // Return unchanged state if note not found
       }
       
@@ -224,7 +403,7 @@ export const useStore = create<AppState>((set, get) => ({
       // Save notes asynchronously
       saveNotes(updatedNotes).then(success => {
         if (!success) {
-          console.error('Failed to save notes after updating');
+          logger.error('Failed to save notes after updating');
         }
       });
       
@@ -250,7 +429,7 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   deleteNote: (id) => {
-    console.log('Deleting note (moving to trash):', id);
+    logger.log('Deleting note (moving to trash):', id);
     
     set(state => {
       const updatedNotes = state.notes.map(note => 
@@ -260,7 +439,7 @@ export const useStore = create<AppState>((set, get) => ({
       // Save notes asynchronously
       saveNotes(updatedNotes).then(success => {
         if (!success) {
-          console.error('Failed to save notes after deleting');
+          logger.error('Failed to save notes after deleting');
         }
       });
       
@@ -273,7 +452,7 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   restoreNote: (id) => {
-    console.log('Restoring note from trash:', id);
+    logger.log('Restoring note from trash:', id);
     
     set(state => {
       const updatedNotes = state.notes.map(note => 
@@ -283,7 +462,7 @@ export const useStore = create<AppState>((set, get) => ({
       // Save notes asynchronously
       saveNotes(updatedNotes).then(success => {
         if (!success) {
-          console.error('Failed to save notes after restoring');
+          logger.error('Failed to save notes after restoring');
         }
       });
       
@@ -296,7 +475,7 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   permanentlyDeleteNote: (id) => {
-    console.log('Permanently deleting note:', id);
+    logger.log('Permanently deleting note:', id);
     
     set(state => {
       const updatedNotes = state.notes.filter(note => note.id !== id);
@@ -304,7 +483,7 @@ export const useStore = create<AppState>((set, get) => ({
       // Save notes asynchronously
       saveNotes(updatedNotes).then(success => {
         if (!success) {
-          console.error('Failed to save notes after permanent deletion');
+          logger.error('Failed to save notes after permanent deletion');
         }
       });
       
@@ -317,7 +496,7 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   pinNote: (id) => {
-    console.log('Pinning note:', id);
+    logger.log('Pinning note:', id);
     
     set(state => {
       const updatedNotes = state.notes.map(note => 
@@ -327,7 +506,7 @@ export const useStore = create<AppState>((set, get) => ({
       // Save notes asynchronously
       saveNotes(updatedNotes).then(success => {
         if (!success) {
-          console.error('Failed to save notes after pinning');
+          logger.error('Failed to save notes after pinning');
         }
       });
       
@@ -340,7 +519,7 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   unpinNote: (id) => {
-    console.log('Unpinning note:', id);
+    logger.log('Unpinning note:', id);
     
     set(state => {
       const updatedNotes = state.notes.map(note => 
@@ -350,7 +529,7 @@ export const useStore = create<AppState>((set, get) => ({
       // Save notes asynchronously
       saveNotes(updatedNotes).then(success => {
         if (!success) {
-          console.error('Failed to save notes after unpinning');
+          logger.error('Failed to save notes after unpinning');
         }
       });
       
@@ -395,12 +574,13 @@ export const useStore = create<AppState>((set, get) => ({
       );
     }
     
-    // Sort: pinned notes first, then by updatedAt (newest first)
+    // Sort: pinned notes first, then by createdAt (newest first)
     filtered.sort((a, b) => {
       if (a.isPinned && !b.isPinned) return -1;
       if (!a.isPinned && b.isPinned) return 1;
       
-      return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+      // For notes with the same pinned status, sort by creation date (newest first)
+      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
     });
     
     return filtered;
