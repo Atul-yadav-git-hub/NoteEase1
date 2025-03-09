@@ -1,0 +1,6 @@
+{
+  "adaptive_icons": {
+    "background_color": "#FFFFFF",
+    "foreground_layer": "./assets/images/resized/adaptive-icon-1024.png"
+  }
+} 

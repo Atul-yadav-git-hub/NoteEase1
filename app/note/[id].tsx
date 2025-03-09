@@ -315,11 +315,14 @@ export default function NoteEditorScreen() {
         });
       }
 
-      // Set isSaved to true
+      // Set isSaved to true and isChanged to false to prevent the confirmation alert
       setIsSaved(true);
+      setIsChanged(false);
       
-      // Go back to the home screen
-      handleBack();
+      // Go back to the home screen without going through the unsaved changes check
+      router.back();
+      return; // Return early to prevent handleBack from running
+      
     } catch (error) {
       logger.error("Error saving note:", error);
       Alert.alert(
