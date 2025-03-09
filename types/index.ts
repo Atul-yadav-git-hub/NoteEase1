@@ -11,6 +11,14 @@ export interface Note {
   isDeleted: boolean;
 }
 
+export interface InitResult {
+  notes: Note[];
+  isDarkMode: boolean;
+  customCategories: string[];
+  storageError?: boolean;
+  errorMessage?: string;
+}
+
 export interface AppState {
   notes: Note[];
   filteredNotes: Note[];
@@ -19,7 +27,9 @@ export interface AppState {
   isDarkMode: boolean;
   isInitialized: boolean;
   customCategories: string[];
-  initialize?: () => Promise<void>;
+  initialNoteCategory: NoteCategory | null;
+  resetAppData?: () => Promise<boolean>;
+  initialize?: () => Promise<InitResult | void>;
   toggleTheme: () => void;
   addNote: (note: Omit<Note, 'id' | 'createdAt' | 'updatedAt'>) => void;
   updateNote: (id: string, noteUpdates: Partial<Note>) => void;
@@ -33,4 +43,5 @@ export interface AppState {
   filterNotes: (notesArray?: Note[]) => Note[];
   addCustomCategory: (category: string) => void;
   removeCustomCategory: (category: string) => void;
+  setInitialNoteCategory: (category: NoteCategory | null) => void;
 } 

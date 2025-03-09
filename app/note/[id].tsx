@@ -27,6 +27,19 @@ import { NoteCategory } from "../../types";
 import { lightTheme, darkTheme } from "../../constants/theme";
 import * as ImagePicker from 'expo-image-picker';
 
+// Only log in development mode
+const logger = {
+  log: (...args: any[]) => {
+    if (__DEV__) console.log(...args);
+  },
+  warn: (...args: any[]) => {
+    if (__DEV__) console.warn(...args);
+  },
+  error: (...args: any[]) => {
+    if (__DEV__) console.error(...args);
+  }
+};
+
 // Component for category selection
 const CategorySelector = ({
   selectedCategory,
@@ -156,6 +169,8 @@ export default function NoteEditorScreen() {
     customCategories,
     addCustomCategory,
     removeCustomCategory,
+    initialNoteCategory,
+    setInitialNoteCategory,
   } = useStore();
 
   const theme = isDarkMode ? darkTheme : lightTheme;
@@ -169,13 +184,22 @@ export default function NoteEditorScreen() {
   const [title, setTitle] = useState(existingNote?.title || "");
   const [content, setContent] = useState(existingNote?.content || "");
   const [category, setCategory] = useState<NoteCategory>(
-    existingNote?.category || "personal"
+    existingNote?.category || initialNoteCategory || "personal"
   );
   const [isSaved, setIsSaved] = useState(true);
   const [isChanged, setIsChanged] = useState(false);
   const [showTagModal, setShowTagModal] = useState(false);
   const [newTagName, setNewTagName] = useState("");
   const tagInputRef = useRef<TextInput>(null);
+
+  // Clear initial category when component unmounts
+  useEffect(() => {
+    return () => {
+      if (setInitialNoteCategory) {
+        setInitialNoteCategory(null);
+      }
+    };
+  }, []);
 
   // Focus the tag input when the modal becomes visible
   useEffect(() => {
@@ -260,42 +284,48 @@ export default function NoteEditorScreen() {
 
   // Manual save function
   const saveNote = () => {
-    console.log("Saving note...", { title, hasContent: !!content, isNewNote });
+    logger.log("Saving note...", { title, hasContent: !!content, isNewNote });
 
-    // Only save if we have at least a title or content
-    if (!title && !content) {
-      return; // Don't save empty notes
+    if (!title.trim() && !content.trim()) {
+      // Skip saving empty notes
+      handleBack();
+      return;
     }
 
     try {
       if (isNewNote) {
         const newNote = {
-          title: title || "Untitled",
-          content,
-          category,
+          title: title.trim() || "Untitled Note",
+          content: content,
+          category: category,
           isPinned: false,
           isDeleted: false,
         };
 
-        console.log("Creating new note:", newNote.title);
+        logger.log("Creating new note:", newNote.title);
         addNote(newNote);
-
-        // Navigate back to the home screen without alert
-        router.back();
       } else if (existingNote) {
-        console.log("Updating existing note:", existingNote.id);
-
-        updateNote(noteId, {
-          title: title || "Untitled",
-          content,
-          category,
+        logger.log("Updating existing note:", existingNote.id);
+        
+        updateNote(existingNote.id, {
+          title: title.trim() || "Untitled Note",
+          content: content,
+          category: category,
+          // Don't update isPinned or isDeleted state
         });
-
-        setIsSaved(true);
-        setIsChanged(false);
       }
+
+      // Set isSaved to true
+      setIsSaved(true);
+      
+      // Go back to the home screen
+      handleBack();
     } catch (error) {
-      console.error("Error saving note:", error);
+      logger.error("Error saving note:", error);
+      Alert.alert(
+        "Error",
+        "Could not save your note. Please try again."
+      );
     }
   };
 
@@ -368,68 +398,100 @@ export default function NoteEditorScreen() {
   
   // Handle picking an image and inserting it into the editor
   const handleImagePick = async () => {
+    logger.log('Starting image picker flow');
+    
     try {
-      console.log('Starting image picker flow');
-      // Request permissions first
-      const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      console.log('Permission result:', permissionResult);
+      // Check permissions
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
       
-      if (!permissionResult.granted) {
+      if (status !== 'granted') {
+        logger.error("Error picking image:", "Permission denied");
         Alert.alert(
-          "Permission Required", 
-          "You need to grant access to your photo library to add images."
+          'Permission Required',
+          'Sorry, we need camera roll permissions to make this work!'
         );
         return;
       }
       
-      // Launch the image picker
-      console.log('Launching image picker');
+      continueImagePick();
+    } catch (error) {
+      logger.error("Error in image picker:", error);
+    }
+  };
+  
+  // Continue with image picking after warning
+  const continueImagePick = async () => {
+    try {
+      const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      logger.log('Permission result:', permissionResult);
+
+      if (permissionResult.granted === false) {
+        Alert.alert(
+          'Permission Required',
+          'Sorry, we need camera roll permissions to make this work!'
+        );
+        return;
+      }
+
+      logger.log('Launching image picker');
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
         allowsEditing: true,
         quality: 0.8,
-        base64: true, // Request base64 data
+        base64: true,
       });
-      console.log('Image picker result:', result.canceled ? 'Canceled' : 'Image selected');
+
+      logger.log('Image picker result:', result.canceled ? 'Canceled' : 'Image selected');
       
-      if (!result.canceled && result.assets && result.assets.length > 0) {
+      if (!result.canceled && result.assets && result.assets[0]) {
         const selectedImage = result.assets[0];
-        console.log('Selected image URI:', selectedImage.uri.substring(0, 30) + '...');
+        const sizeInMB = selectedImage.fileSize ? selectedImage.fileSize / (1024 * 1024) : 0;
         
-        // Use base64 encoding which works better in WebView
-        if (selectedImage.base64) {
-          console.log('Base64 data available, length:', selectedImage.base64.length);
-          
-          // Get the correct MIME type or default to jpeg
-          const type = selectedImage.uri.endsWith('.png') ? 'png' : 
-                      selectedImage.uri.endsWith('.gif') ? 'gif' : 'jpeg';
-          
-          // Create a data URL from the base64 string
-          const dataUrl = `data:image/${type};base64,${selectedImage.base64}`;
-          
-          // Get the current rich text editor instance
-          const editor = richText.current;
-          if (editor) {
-            console.log('Editor found, inserting image as data URL');
-            // Insert the image with proper HTML using data URL
-            editor.insertHTML(`<img src="${dataUrl}" style="max-width: 90%; height: auto; margin: 10px auto; display: block;" />`);
-            console.log('Image HTML inserted');
-            
-            // Mark the note as changed
-            setIsChanged(true);
-            setIsSaved(false);
-          } else {
-            console.error('Editor not found');
-            Alert.alert("Error", "Could not insert image. Editor not ready.");
-          }
-        } else {
-          console.error('No base64 data available');
-          Alert.alert("Error", "Could not process the selected image.");
-        }
+        logger.log(`Selected image size: ~${sizeInMB.toFixed(2)} MB`);
+        
+        insertImageToEditor(selectedImage);
       }
     } catch (error) {
-      console.error("Error picking image:", error);
-      Alert.alert("Error", "Failed to pick image. Please try again.");
+      logger.error("Error in image picker flow:", error);
+      Alert.alert('Error', 'Could not select the image. Please try again.');
+    }
+  };
+  
+  // Insert image into editor
+  const insertImageToEditor = (selectedImage: any) => {
+    if (!selectedImage.base64) {
+      Alert.alert('Error', 'Could not process the image. Please try a different one.');
+      return;
+    }
+
+    logger.log('Base64 data available, length:', selectedImage.base64.length);
+
+    // Construct the data URL
+    const dataUrl = `data:image/${selectedImage.uri.split('.').pop()};base64,${selectedImage.base64}`;
+    
+    // Insert to the editor
+    if (richText.current) {
+      // Get the current cursor position
+      const currentPosition = richText.current?.getContentHtml() || '';
+      
+      logger.log('Editor found, inserting image as data URL');
+      
+      // Create the image HTML
+      const imageHtml = `<img src="${dataUrl}" style="max-width: 100%; height: auto;" />`;
+      
+      // Insert the image
+      richText.current.insertHTML(imageHtml);
+      
+      // Focus back to editor
+      richText.current.focusContentEditor();
+      
+      logger.log('Image HTML inserted');
+      
+      // Mark content as changed
+      setIsChanged(true);
+    } else {
+      logger.error('Editor not found');
+      Alert.alert('Error', 'Could not insert the image. Please try again.');
     }
   };
 
@@ -504,7 +566,12 @@ export default function NoteEditorScreen() {
         <ScrollView
           style={styles.contentContainer}
           keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}
+          showsVerticalScrollIndicator={true}
+          nestedScrollEnabled={true}
+          contentContainerStyle={{ flexGrow: 1 }}
+          scrollEventThrottle={16}
+          bounces={false}
+          overScrollMode="never"
         >
           {/* Title Input */}
           <TextInput
@@ -532,17 +599,37 @@ export default function NoteEditorScreen() {
               style={styles.editor}
               placeholder="Start writing here..."
               editorInitializedCallback={() => {
-                console.log('Editor initialized');
+                logger.log('Editor initialized');
               }}
               useContainer={true}
               initialHeight={400}
               disabled={false}
               pasteAsPlainText={true}
               onPaste={(data) => {
-                console.log('Paste event detected');
+                logger.log('Paste event detected');
+              }}
+              scrollEnabled={true}
+              containerStyle={{ 
+                minHeight: 400,
+                flexGrow: 1,
               }}
               onKeyUp={() => setIsChanged(true)}
-              onFocus={() => console.log('Editor focused')}
+              onFocus={() => logger.log('Editor focused')}
+              onBlur={() => logger.log('Editor blurred')}
+              onHeightChange={(height) => {
+                logger.log('Editor height changed', height);
+                // Force scroll update when height changes
+                if (height > 400) {
+                  // Small timeout to ensure the UI has updated
+                  setTimeout(() => {
+                    const editor = richText.current;
+                    if (editor) {
+                      // Force WebView to recalculate its size
+                      editor.focusContentEditor();
+                    }
+                  }, 100);
+                }
+              }}
               editorStyle={{
                 backgroundColor: theme.card,
                 color: theme.text,
@@ -554,7 +641,7 @@ export default function NoteEditorScreen() {
                   color: ${theme.text};
                   min-height: 200px;
                   img {
-                    max-width: 100%;
+                    max-width: 98%;
                     margin: 8px auto;
                     display: block;
                     height: auto;
@@ -562,6 +649,26 @@ export default function NoteEditorScreen() {
                   }
                   p {
                     margin: 0 0 16px 0;
+                  }
+                  li {
+                    margin-bottom: 8px;
+                    position: relative;
+                  }
+                  input[type="checkbox"] {
+                    width: 18px;
+                    height: 18px;
+                    margin-right: 8px;
+                    cursor: pointer;
+                    pointer-events: auto;
+                    vertical-align: middle;
+                  }
+                  ul, ol {
+                    padding-left: 24px;
+                    margin-bottom: 16px;
+                  }
+                  .checkbox-list-item {
+                    padding-left: 4px;
+                    min-height: 28px;
                   }
                 `,
               }}
@@ -583,10 +690,11 @@ export default function NoteEditorScreen() {
             actions.heading2,
             actions.insertBulletsList,
             actions.insertOrderedList,
-            actions.checkboxList,
             actions.undo,
             actions.redo,
-            actions.insertImage
+            actions.insertImage,
+            actions.code,
+            actions.fontSize,
           ]}
           iconMap={{
             [actions.insertImage]: ({ tintColor }: { tintColor: string | undefined }) => (
@@ -594,6 +702,7 @@ export default function NoteEditorScreen() {
             ),
           }}
           onPressAddImage={handleImagePick}
+          iconSize={18}
         />
       </KeyboardAvoidingView>
 
@@ -706,9 +815,11 @@ const styles = StyleSheet.create({
   },
   editorContainer: {
     flex: 1,
+    display: 'flex',
+    flexDirection: 'column',
   },
   contentContainer: {
-    flex: 1,
+    flexGrow: 1,
   },
   titleInput: {
     fontSize: 24,
@@ -720,10 +831,14 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     overflow: "hidden",
     marginBottom: 16,
+    minHeight: 400,
+    flex: 1,
+    position: 'relative',
   },
   editor: {
+    minHeight: 400,
     flex: 1,
-    minHeight: 250,
+    overflow: 'visible',
   },
   toolbar: {
     borderTopWidth: 1,
