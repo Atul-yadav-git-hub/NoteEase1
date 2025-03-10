@@ -372,7 +372,6 @@ export default function HomeScreen() {
     activeCategory,
     searchQuery,
     isDarkMode,
-    initialize,
     toggleTheme,
     setActiveCategory,
     setSearchQuery,
@@ -386,43 +385,15 @@ export default function HomeScreen() {
 
   // Count of deleted notes (for trash badge)
   const trashCount = notes.filter(note => note.isDeleted).length;
-
-  // Initialize the store
-  useEffect(() => {
-    const attemptInitialize = async () => {
-      try {
-        if (initialize) {
-          await initialize();
-        }
-      } catch (error) {
-        logger.error("Critical initialization error:", error);
-        
-        Alert.alert(
-          "Initialization Error",
-          "There was a problem loading your data. Would you like to reset the app?",
-          [
-            {
-              text: "Cancel",
-              style: "cancel"
-            },
-            {
-              text: "Reset",
-              style: "destructive",
-              onPress: handleResetApp
-            }
-          ]
-        );
-      }
-    };
-    
-    attemptInitialize();
-  }, []);
   
   // Handle manual reset app data
   const handleResetApp = async () => {
     try {
-      // Cast to any to avoid TypeScript errors with optional function
-      await (resetAppData as any)?.();
+      if (!resetAppData) {
+        Alert.alert("Error", "Reset functionality not available");
+        return;
+      }
+      await resetAppData();
       setStorageErrorShown(true);
       Alert.alert("App Reset", "All app data has been cleared.");
     } catch (err) {

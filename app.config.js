@@ -19,6 +19,9 @@ module.exports = {
       image: './assets/images/resized/splash-icon-2048.png',
       resizeMode: 'contain',
       backgroundColor: '#ffffff',
+      // Add Android-specific splash screen settings
+      splashScreenDelay: 0, // Immediately hide when ready
+      splashScreenFadeOutDuration: 0,
     },
   },
   ios: {
@@ -27,6 +30,9 @@ module.exports = {
       image: './assets/images/resized/splash-icon-2048.png',
       resizeMode: 'contain',
       backgroundColor: '#ffffff',
+      // Add iOS-specific splash screen settings
+      splashScreenDelay: 0, // Immediately hide when ready
+      splashScreenFadeOutDuration: 0,
     },
   },
   extra: {
@@ -41,7 +47,16 @@ module.exports = {
     buildMode: isProd ? 'production' : 'development',
   },
   // Ensure all plugins are properly configured
-  plugins: config.expo.plugins,
+  plugins: [
+    ...config.expo.plugins || [],
+    [
+      'expo-splash-screen',
+      {
+        // Configure splash screen plugin
+        enableSplashScreenAnimation: false,
+      },
+    ],
+  ],
   updates: {
     // Add auto-update functionality
     fallbackToCacheTimeout: 0,

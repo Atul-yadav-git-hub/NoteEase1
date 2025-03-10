@@ -41,6 +41,7 @@ export interface AppState {
   setActiveCategory: (category: NoteCategory) => void;
   setSearchQuery: (query: string) => void;
   filterNotes: (notesArray?: Note[]) => Note[];
+  filterNotesSync: (notesArray?: Note[], category?: NoteCategory, query?: string) => Note[];
   addCustomCategory: (category: string) => void;
   removeCustomCategory: (category: string) => void;
   setInitialNoteCategory: (category: NoteCategory | null) => void;

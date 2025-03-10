@@ -218,51 +218,13 @@ export const useStore = create<AppState>((set, get) => ({
     if (get().isInitialized) return;
     
     try {
-      try {
-        logger.log('Attempting to load app data...');
-        const result = await loadInitialState();
-        logger.log('Store initialized with', result.notes.length, 'notes');
-        
-        // Check if there was a storage error
-        if (result.storageError) {
-          logger.warn('Storage error detected, resetting app data');
-          await emergencyClearStorage();
-          
-          set({ 
-            notes: [],
-            filteredNotes: [],
-            customCategories: [],
-            isDarkMode: false,
-            isInitialized: true
-          });
-          
-          return {
-            notes: [],
-            isDarkMode: false,
-            customCategories: [],
-            storageError: true,
-            errorMessage: 'Your notes data exceeded the storage limit. The app has been reset. Please avoid storing large images directly in notes.'
-          };
-        }
-        
-        // Set the basic state
-        set({ 
-          notes: result.notes,
-          isDarkMode: result.isDarkMode,
-          customCategories: result.customCategories,
-          isInitialized: true
-        });
-        
-        // Filter and sort the notes
-        const filteredAndSortedNotes = get().filterNotes(result.notes);
-        set({ filteredNotes: filteredAndSortedNotes });
-        
-        return result;
-      } catch (loadError) {
-        // Critical recovery - if any error happens during load, clear everything
-        logger.error('Critical error loading data:', loadError);
-        logger.warn('Forcing complete app reset due to critical error');
-        
+      logger.log('Attempting to load app data...');
+      const result = await loadInitialState();
+      logger.log('Store initialized with', result.notes.length, 'notes');
+      
+      // Check if there was a storage error
+      if (result.storageError) {
+        logger.warn('Storage error detected, resetting app data');
         await emergencyClearStorage();
         
         set({ 
@@ -270,7 +232,9 @@ export const useStore = create<AppState>((set, get) => ({
           filteredNotes: [],
           customCategories: [],
           isDarkMode: false,
-          isInitialized: true
+          isInitialized: true,
+          activeCategory: 'all',
+          searchQuery: ''
         });
         
         return {
@@ -278,9 +242,25 @@ export const useStore = create<AppState>((set, get) => ({
           isDarkMode: false,
           customCategories: [],
           storageError: true,
-          errorMessage: 'A critical error occurred. All app data has been reset to recover functionality.'
+          errorMessage: 'Your notes data exceeded the storage limit. The app has been reset. Please avoid storing large images directly in notes.'
         };
       }
+      
+      // Filter and sort the notes before setting state
+      const filteredAndSortedNotes = result.notes.filter((note: Note) => !note.isDeleted);
+      
+      // Set all state at once to prevent multiple updates
+      set({ 
+        notes: result.notes,
+        filteredNotes: filteredAndSortedNotes,
+        isDarkMode: result.isDarkMode,
+        customCategories: result.customCategories,
+        isInitialized: true,
+        activeCategory: 'all',
+        searchQuery: ''
+      });
+      
+      return result;
     } catch (error) {
       logger.error('Unrecoverable error in initialization:', error);
       // Last resort - just mark as initialized with empty data
@@ -288,7 +268,10 @@ export const useStore = create<AppState>((set, get) => ({
         notes: [],
         filteredNotes: [],
         customCategories: [],
-        isInitialized: true 
+        isDarkMode: false,
+        isInitialized: true,
+        activeCategory: 'all',
+        searchQuery: ''
       });
       
       return {
@@ -341,7 +324,64 @@ export const useStore = create<AppState>((set, get) => ({
     });
   },
 
-  // Note management - with async operations and better error handling
+  // Filter notes without triggering state updates
+  filterNotesSync: (notesArray?: Note[], category?: NoteCategory, query?: string) => {
+    const { notes: storeNotes, activeCategory, searchQuery } = get();
+    const notesToFilter = notesArray || storeNotes;
+    const categoryToUse = category !== undefined ? category : activeCategory;
+    const queryToUse = query !== undefined ? query : searchQuery;
+    
+    // First filter by active category and deleted status
+    let filtered = notesToFilter.filter(note => !note.isDeleted);
+    
+    if (categoryToUse !== 'all') {
+      filtered = filtered.filter(note => note.category === categoryToUse);
+    }
+    
+    // Then filter by search query
+    if (queryToUse.trim()) {
+      const queryLower = queryToUse.toLowerCase();
+      filtered = filtered.filter(
+        note => 
+          note.title.toLowerCase().includes(queryLower) || 
+          note.content.toLowerCase().includes(queryLower)
+      );
+    }
+    
+    // Sort: pinned notes first, then by createdAt (newest first)
+    filtered.sort((a, b) => {
+      if (a.isPinned && !b.isPinned) return -1;
+      if (!a.isPinned && b.isPinned) return 1;
+      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+    });
+    
+    return filtered;
+  },
+
+  // Public filter method that updates state
+  filterNotes: (notesArray?: Note[]) => {
+    const filtered = get().filterNotesSync(notesArray);
+    set({ filteredNotes: filtered });
+    return filtered;
+  },
+
+  setActiveCategory: (category: NoteCategory) => {
+    const filtered = get().filterNotesSync(undefined, category);
+    set({ 
+      activeCategory: category,
+      filteredNotes: filtered
+    });
+  },
+
+  setSearchQuery: (query: string) => {
+    const filtered = get().filterNotesSync(undefined, undefined, query);
+    set({ 
+      searchQuery: query,
+      filteredNotes: filtered
+    });
+  },
+
+  // Note management with optimized updates
   addNote: (note: Omit<Note, 'id' | 'createdAt' | 'updatedAt'>) => {
     logger.log('Adding new note:', note.title);
     
@@ -353,7 +393,6 @@ export const useStore = create<AppState>((set, get) => ({
         updatedAt: new Date().toISOString(),
       };
       
-      // Add new note at the beginning of the array instead of the end
       const updatedNotes = [newNote, ...state.notes];
       
       // Save notes asynchronously
@@ -363,8 +402,7 @@ export const useStore = create<AppState>((set, get) => ({
         }
       });
       
-      // If this is a custom category not in the standard ones,
-      // add it to the custom categories list
+      // Handle custom category
       if (
         typeof note.category === 'string' && 
         note.category !== 'all' && 
@@ -376,7 +414,7 @@ export const useStore = create<AppState>((set, get) => ({
         get().addCustomCategory(note.category);
       }
       
-      const filtered = get().filterNotes(updatedNotes);
+      const filtered = get().filterNotesSync(updatedNotes);
       return { 
         notes: updatedNotes,
         filteredNotes: filtered
@@ -391,7 +429,7 @@ export const useStore = create<AppState>((set, get) => ({
       const noteToUpdate = state.notes.find(note => note.id === id);
       if (!noteToUpdate) {
         logger.error('Note not found for update:', id);
-        return state; // Return unchanged state if note not found
+        return state;
       }
       
       const updatedNotes = state.notes.map(note => 
@@ -407,7 +445,7 @@ export const useStore = create<AppState>((set, get) => ({
         }
       });
       
-      // If a custom category is being set, add it to the list
+      // Handle custom category
       if (
         noteUpdates.category && 
         typeof noteUpdates.category === 'string' && 
@@ -420,7 +458,7 @@ export const useStore = create<AppState>((set, get) => ({
         get().addCustomCategory(noteUpdates.category);
       }
       
-      const filtered = get().filterNotes(updatedNotes);
+      const filtered = get().filterNotesSync(updatedNotes);
       return { 
         notes: updatedNotes,
         filteredNotes: filtered
@@ -428,7 +466,7 @@ export const useStore = create<AppState>((set, get) => ({
     });
   },
 
-  deleteNote: (id) => {
+  deleteNote: (id: string) => {
     logger.log('Deleting note (moving to trash):', id);
     
     set(state => {
@@ -436,14 +474,13 @@ export const useStore = create<AppState>((set, get) => ({
         note.id === id ? { ...note, isDeleted: true } : note
       );
       
-      // Save notes asynchronously
       saveNotes(updatedNotes).then(success => {
         if (!success) {
           logger.error('Failed to save notes after deleting');
         }
       });
       
-      const filtered = get().filterNotes(updatedNotes);
+      const filtered = get().filterNotesSync(updatedNotes);
       return { 
         notes: updatedNotes,
         filteredNotes: filtered
@@ -451,7 +488,27 @@ export const useStore = create<AppState>((set, get) => ({
     });
   },
 
-  restoreNote: (id) => {
+  permanentlyDeleteNote: (id: string) => {
+    logger.log('Permanently deleting note:', id);
+    
+    set(state => {
+      const updatedNotes = state.notes.filter(note => note.id !== id);
+      
+      saveNotes(updatedNotes).then(success => {
+        if (!success) {
+          logger.error('Failed to save notes after permanent deletion');
+        }
+      });
+      
+      const filtered = get().filterNotesSync(updatedNotes);
+      return { 
+        notes: updatedNotes,
+        filteredNotes: filtered
+      };
+    });
+  },
+
+  restoreNote: (id: string) => {
     logger.log('Restoring note from trash:', id);
     
     set(state => {
@@ -459,14 +516,13 @@ export const useStore = create<AppState>((set, get) => ({
         note.id === id ? { ...note, isDeleted: false } : note
       );
       
-      // Save notes asynchronously
       saveNotes(updatedNotes).then(success => {
         if (!success) {
           logger.error('Failed to save notes after restoring');
         }
       });
       
-      const filtered = get().filterNotes(updatedNotes);
+      const filtered = get().filterNotesSync(updatedNotes);
       return { 
         notes: updatedNotes,
         filteredNotes: filtered
@@ -474,28 +530,7 @@ export const useStore = create<AppState>((set, get) => ({
     });
   },
 
-  permanentlyDeleteNote: (id) => {
-    logger.log('Permanently deleting note:', id);
-    
-    set(state => {
-      const updatedNotes = state.notes.filter(note => note.id !== id);
-      
-      // Save notes asynchronously
-      saveNotes(updatedNotes).then(success => {
-        if (!success) {
-          logger.error('Failed to save notes after permanent deletion');
-        }
-      });
-      
-      const filtered = get().filterNotes(updatedNotes);
-      return { 
-        notes: updatedNotes,
-        filteredNotes: filtered
-      };
-    });
-  },
-
-  pinNote: (id) => {
+  pinNote: (id: string) => {
     logger.log('Pinning note:', id);
     
     set(state => {
@@ -503,14 +538,13 @@ export const useStore = create<AppState>((set, get) => ({
         note.id === id ? { ...note, isPinned: true } : note
       );
       
-      // Save notes asynchronously
       saveNotes(updatedNotes).then(success => {
         if (!success) {
           logger.error('Failed to save notes after pinning');
         }
       });
       
-      const filtered = get().filterNotes(updatedNotes);
+      const filtered = get().filterNotesSync(updatedNotes);
       return { 
         notes: updatedNotes,
         filteredNotes: filtered
@@ -518,7 +552,7 @@ export const useStore = create<AppState>((set, get) => ({
     });
   },
 
-  unpinNote: (id) => {
+  unpinNote: (id: string) => {
     logger.log('Unpinning note:', id);
     
     set(state => {
@@ -526,63 +560,17 @@ export const useStore = create<AppState>((set, get) => ({
         note.id === id ? { ...note, isPinned: false } : note
       );
       
-      // Save notes asynchronously
       saveNotes(updatedNotes).then(success => {
         if (!success) {
           logger.error('Failed to save notes after unpinning');
         }
       });
       
-      const filtered = get().filterNotes(updatedNotes);
+      const filtered = get().filterNotesSync(updatedNotes);
       return { 
         notes: updatedNotes,
         filteredNotes: filtered
       };
     });
   },
-
-  setActiveCategory: (category) => {
-    set({ activeCategory: category });
-    const filtered = get().filterNotes();
-    set({ filteredNotes: filtered });
-  },
-
-  setSearchQuery: (query) => {
-    set({ searchQuery: query });
-    const filtered = get().filterNotes();
-    set({ filteredNotes: filtered });
-  },
-
-  filterNotes: (notesArray?: Note[]) => {
-    const { notes: storeNotes, activeCategory, searchQuery } = get();
-    const notes = notesArray || storeNotes;
-    
-    // First filter by active category and deleted status
-    let filtered = notes.filter(note => !note.isDeleted);
-    
-    if (activeCategory !== 'all') {
-      filtered = filtered.filter(note => note.category === activeCategory);
-    }
-    
-    // Then filter by search query
-    if (searchQuery.trim()) {
-      const query = searchQuery.toLowerCase();
-      filtered = filtered.filter(
-        note => 
-          note.title.toLowerCase().includes(query) || 
-          note.content.toLowerCase().includes(query)
-      );
-    }
-    
-    // Sort: pinned notes first, then by createdAt (newest first)
-    filtered.sort((a, b) => {
-      if (a.isPinned && !b.isPinned) return -1;
-      if (!a.isPinned && b.isPinned) return 1;
-      
-      // For notes with the same pinned status, sort by creation date (newest first)
-      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
-    });
-    
-    return filtered;
-  }
 })); 
